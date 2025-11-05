@@ -1,145 +1,130 @@
-import {
-  Blockhash,
-  createSolanaClient,
-  createTransaction,
-  generateKeyPairSigner,
-  Instruction,
-  isSolanaError,
-  KeyPairSigner,
-  signTransactionMessageWithSigners,
-} from 'gill'
-import {
-  fetchVotingdapp,
-  getCloseInstruction,
-  getDecrementInstruction,
-  getIncrementInstruction,
-  getInitializeInstruction,
-  getSetInstruction,
-} from '../src'
-// @ts-ignore error TS2307 suggest setting `moduleResolution` but this is already configured
-import { loadKeypairSignerFromFile } from 'gill/node'
+import * as anchor from '@coral-xyz/anchor'
+import { Program } from '@coral-xyz/anchor'
+import { Keypair, PublicKey } from '@solana/web3.js'
+import { startAnchor } from 'anchor-bankrun'
+import { BankrunProvider } from 'anchor-bankrun'
+import { Votingdapp } from '../target/types/votingdapp'
+import { describe } from 'node:test'
+import { isContext } from 'vm'
 
-const { rpc, sendAndConfirmTransaction } = createSolanaClient({ urlOrMoniker: process.env.ANCHOR_PROVIDER_URL! })
+const IDL = require('/home/eleven/Rust/solana/Learning/voting-dapp/anchor/target/idl/votingdapp.json');
+const votingAddress = new PublicKey("9ivJ8jJsyF29fFHgYE6WoFBDjtDGVp1vJqSgQnP7qPL8");
 
-describe('votingdapp', () => {
-  let payer: KeyPairSigner
-  let votingdapp: KeyPairSigner
+describe('Voting', () => {
+
+  let Context;
+  let provider: BankrunProvider;
+  let votingProgram: Program<Votingdapp>;
 
   beforeAll(async () => {
-    votingdapp = await generateKeyPairSigner()
-    payer = await loadKeypairSignerFromFile(process.env.ANCHOR_WALLET!)
-  })
+    Context = await startAnchor("", [{ name: "votingdapp", programId: votingAddress }], []);
+    provider = new BankrunProvider(Context);
 
-  it('Initialize Votingdapp', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getInitializeInstruction({ payer: payer, votingdapp: votingdapp })
+    votingProgram = new Program<Votingdapp>(
+      IDL,
+      provider,
+    );
+  });
 
-    // ACT
-    await sendAndConfirm({ ix, payer })
+  it('Initialize Poll', async () => {
+    // we will load the compiled program votingdapp here
+    // keep the naming proper or you will run into issues
+    Context = await startAnchor("", [{ name: "votingdapp", programId: votingAddress }], []);
+    provider = new BankrunProvider(Context);
 
-    // ASSER
-    const currentVotingdapp = await fetchVotingdapp(rpc, votingdapp.address)
-    expect(currentVotingdapp.data.count).toEqual(0)
-  })
+    votingProgram = new Program<Votingdapp>(
+      IDL,
+      provider,
+    );
 
-  it('Increment Votingdapp', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getIncrementInstruction({
-      votingdapp: votingdapp.address,
-    })
+    await votingProgram.methods.initialize(
+      
+      new anchor.BN(1),
+      "Best programming language?",
+      new anchor.BN(Date.now()),
+      new anchor.BN(Date.now() + 1000000),
+      new anchor.BN(3),
+    ).rpc();
 
-    // ACT
-    await sendAndConfirm({ ix, payer })
+    const [pollAddress] = PublicKey.findProgramAddressSync(
+      [new anchor.BN(1).toArrayLike(Buffer, "le", 8)],
+      votingAddress,
+    )
 
-    // ASSERT
-    const currentCount = await fetchVotingdapp(rpc, votingdapp.address)
-    expect(currentCount.data.count).toEqual(1)
-  })
+    const poll = await votingProgram.account.poll.fetch(pollAddress);
+    console.log("Poll account: ", poll);
+    // Verify the poll was created correctly
+    // console.log("Poll_start: ", poll.pollStart.toString());
+    expect(poll.description).to.equal("Best programming language?");
+    expect(poll.pollStart.toNumber()).toBeLessThan(poll.pollEnd.toNumber());
+    expect(poll.candidateAmount.toNumber()).toBeGreaterThan(1);
 
-  it('Increment Votingdapp Again', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getIncrementInstruction({ votingdapp: votingdapp.address })
+  });
 
-    // ACT
-    await sendAndConfirm({ ix, payer })
+  it('Initialize Candidate', async () => {
+    await votingProgram.methods.initializeCandidate(
+      
+      "Rust", 
+      new anchor.BN(1),
+      new anchor.BN(100),
+    ).rpc();
 
-    // ASSERT
-    const currentCount = await fetchVotingdapp(rpc, votingdapp.address)
-    expect(currentCount.data.count).toEqual(2)
-  })
+    await votingProgram.methods.initializeCandidate(
+      
+      "C++", 
+      new anchor.BN(1),
+      new anchor.BN(100),
+    ).rpc();
+  
+    await votingProgram.methods.initializeCandidate(
+      
+      "Python", 
+      new anchor.BN(1),
+      new anchor.BN(100),
+    ).rpc();
+  
 
-  it('Decrement Votingdapp', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getDecrementInstruction({
-      votingdapp: votingdapp.address,
-    })
+    const [rustAddress] = PublicKey.findProgramAddressSync(
+      [ Buffer.from("Rust"), new anchor.BN(1).toArrayLike(Buffer, "le", 8)],
+      votingAddress,
+    )
 
-    // ACT
-    await sendAndConfirm({ ix, payer })
+    const [CPlusPlusAddress] = PublicKey.findProgramAddressSync(
+      [ Buffer.from("C++"), new anchor.BN(1).toArrayLike(Buffer, "le", 8)],
+      votingAddress,
+    )
 
-    // ASSERT
-    const currentCount = await fetchVotingdapp(rpc, votingdapp.address)
-    expect(currentCount.data.count).toEqual(1)
-  })
+    const [pythonAddress] = PublicKey.findProgramAddressSync(
+      [ Buffer.from("Python"), new anchor.BN(1).toArrayLike(Buffer, "le", 8)],
+      votingAddress,
+    )
+    const rustCandidate = await votingProgram.account.candidate.fetch(rustAddress);
+    const cppCandidate = await votingProgram.account.candidate.fetch(CPlusPlusAddress);
+    const pythonCandidate = await votingProgram.account.candidate.fetch(pythonAddress);
 
-  it('Set votingdapp value', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getSetInstruction({ votingdapp: votingdapp.address, value: 42 })
+    console.log("Rust Candidate account: ", rustCandidate);
+    console.log("C++ Candidate account: ", cppCandidate);
+    console.log("Python Candidate account: ", pythonCandidate);
 
-    // ACT
-    await sendAndConfirm({ ix, payer })
+    // Verify the candidate was created correctly
+    expect(rustCandidate.candidateName).to.equal("Rust");
+    expect(rustCandidate.pollId.toNumber()).toEqual(1);
+    expect(cppCandidate.candidateName).to.equal("C++");
+    expect(cppCandidate.pollId.toNumber()).toEqual(1);
+    expect(pythonCandidate.candidateName).to.equal("Python");
+    expect(pythonCandidate.pollId.toNumber()).toEqual(1);
 
-    // ASSERT
-    const currentCount = await fetchVotingdapp(rpc, votingdapp.address)
-    expect(currentCount.data.count).toEqual(42)
-  })
 
-  it('Set close the votingdapp account', async () => {
-    // ARRANGE
-    expect.assertions(1)
-    const ix = getCloseInstruction({
-      payer: payer,
-      votingdapp: votingdapp.address,
-    })
 
-    // ACT
-    await sendAndConfirm({ ix, payer })
+  });
 
-    // ASSERT
-    try {
-      await fetchVotingdapp(rpc, votingdapp.address)
-    } catch (e) {
-      if (!isSolanaError(e)) {
-        throw new Error(`Unexpected error: ${e}`)
-      }
-      expect(e.message).toEqual(`Account not found at address: ${votingdapp.address}`)
-    }
-  })
-})
 
-// Helper function to keep the tests DRY
-let latestBlockhash: Awaited<ReturnType<typeof getLatestBlockhash>> | undefined
-async function getLatestBlockhash(): Promise<Readonly<{ blockhash: Blockhash; lastValidBlockHeight: bigint }>> {
-  if (latestBlockhash) {
-    return latestBlockhash
-  }
-  return await rpc
-    .getLatestBlockhash()
-    .send()
-    .then(({ value }) => value)
-}
-async function sendAndConfirm({ ix, payer }: { ix: Instruction; payer: KeyPairSigner }) {
-  const tx = createTransaction({
-    feePayer: payer,
-    instructions: [ix],
-    version: 'legacy',
-    latestBlockhash: await getLatestBlockhash(),
-  })
-  const signedTransaction = await signTransactionMessageWithSigners(tx)
-  return await sendAndConfirmTransaction(signedTransaction)
-}
+  it('Initialize Vote', async () => {
+    await votingProgram.methods.vote(
+      "Rust",
+      new anchor.BN(1),
+    ).rpc();
+  });
+
+
+});
